@@ -233,12 +233,12 @@ import           Prelude                     (Bool (..), Eq (..), Int,
                                               Maybe (..), Either (..), Monad (..), Num (..),
                                               Ord (..), fromIntegral, maybe, either,
                                               ($), Functor (..), Enum, seq, Show, Char,
-                                              otherwise, Either (..), not,
+                                              otherwise, Either (..), not, fst,
                                               ($!), succ, FilePath, IO, String)
 import Data.Word (Word8)
 import qualified Prelude
 import qualified System.IO                   as IO
-import           System.IO.Error             (isDoesNotExistError)
+import           System.IO.Error             (IOError, isDoesNotExistError)
 import           System.IO.Unsafe            (unsafePerformIO)
 import Data.ByteString (ByteString)
 import Data.Text (Text)
@@ -702,17 +702,23 @@ withSinkFileBuilder fp inner =
 -- @since 1.3.0
 sourceDirectory :: MonadResource m => FilePath -> ConduitT i FilePath m ()
 sourceDirectory dir =
+    sourceDirectoryTyped dir .| map fst
+
+sourceDirectoryTyped :: MonadResource m
+                     => FilePath
+                     -> ConduitT i (FilePath, Maybe F.FileType) m ()
+sourceDirectoryTyped dir =
     bracketP (F.openDirStream dir) F.closeDirStream go
   where
     go ds =
         loop
       where
         loop = do
-            mfp <- liftIO $ F.readDirStream ds
-            case mfp of
+            mfpmft <- liftIO $ F.readDirStreamTyped ds
+            case mfpmft of
                 Nothing -> return ()
-                Just fp -> do
-                    yield $ dir </> fp
+                Just (fp, mft) -> do
+                    yield (dir </> fp, mft)
                     loop
 
 -- | Deeply stream the contents of the given directory.
@@ -730,19 +736,17 @@ sourceDirectoryDeep followSymlinks =
     start
   where
     start :: MonadResource m => FilePath -> ConduitT i FilePath m ()
-    start dir = sourceDirectory dir .| awaitForever go
+    start dir = sourceDirectoryTyped dir .| awaitForever go
 
-    go :: MonadResource m => FilePath -> ConduitT i FilePath m ()
-    go fp = do
-        ft <- liftIO $ F.getFileType fp
-        case ft of
-            F.FTFile -> yield fp
-            F.FTFileSym -> yield fp
-            F.FTDirectory -> start fp
-            F.FTDirectorySym
-                | followSymlinks -> start fp
-                | otherwise -> return ()
-            F.FTOther -> return ()
+    go :: MonadResource m
+       => (FilePath, Maybe F.FileType)
+       -> ConduitT i FilePath m ()
+    go (fp, mft) = do
+        ftOrE <- liftIO $ try $ F.resolveFileType fp mft followSymlinks
+        case ftOrE :: Either IOError F.FileType of
+            Right F.FTFile      -> yield fp
+            Right F.FTDirectory -> start fp
+            _                   -> return ()
 
 -- | Ignore a certain number of values in the stream.
 --
