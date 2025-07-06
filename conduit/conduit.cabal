@@ -131,9 +131,20 @@ benchmark optimize-201408
                   , transformers
                   , hspec
                   , mwc-random
-                  , gauge
+                  , tasty-bench
     main-is:        optimize-201408.hs
     ghc-options:    -Wall -O2 -rtsopts
+
+benchmark source-directory
+    default-language: Haskell2010
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   benchmarks
+    build-depends:    base
+                    , conduit
+                    , directory
+                    , tasty-bench
+    main-is:          source-directory.hs
+    ghc-options:      -Wall -O2 -rtsopts
 
 benchmark unfused
     default-language:    Haskell2010
@@ -141,7 +152,7 @@ benchmark unfused
     hs-source-dirs: benchmarks
     build-depends:  base
                   , conduit
-                  , gauge
+                  , tasty-bench
                   , transformers
     main-is:        unfused.hs
     ghc-options:    -Wall -O2 -rtsopts
