@@ -6,7 +6,6 @@
 module Spec (spec) where
 
 import Conduit
-import Prelude hiding (FilePath)
 import Data.Maybe (listToMaybe)
 import Data.Conduit.Combinators (slidingWindow, chunksOfE, chunksOfExactlyE)
 import Data.List (intersperse, sort, find, mapAccumL)
@@ -42,7 +41,9 @@ import Data.ByteString.Builder (byteString, toLazyByteString)
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified StreamSpec
+import UnliftIO.Directory
 import UnliftIO.Exception (pureTry)
+import UnliftIO.Temporary (withTempDirectory)
 
 spec :: Spec
 spec = do
@@ -128,33 +129,49 @@ spec = do
             hDuplicateTo h IO.stdin
             x <- runConduit $ stdinC .| foldC
             x `shouldBe` content
-    let hasExtension' ext fp = takeExtension fp == ext
-    it "sourceDirectory" $ do
-        res <- runConduitRes
-             $ sourceDirectory "test" .| filterC (not . hasExtension' ".swp") .| sinkList
-        sort res `shouldBe`
-          [ "test" </> "Data"
-          , "test" </> "Spec.hs"
-          , "test" </> "StreamSpec.hs"
-          , "test" </> "doctests.hs"
-          , "test" </> "main.hs"
-          , "test" </> "subdir"
+    let testSourceDir :: (FilePath -> ConduitT () FilePath (ResourceT IO) ())
+                      -> [FilePath]
+                      -> Expectation
+        testSourceDir sourceDir expectedFiles =
+            withTempDirectory "." "conduit-test-" $ \tempDir ->
+                withCurrentDirectory tempDir $ do
+                    setupTestDir
+                    res <- runConduitRes $ sourceDir "." .| sinkList
+                    sort res `shouldBe` map ("." </>) (sort expectedFiles)
+        setupTestDir = do
+            writeFile "a-file.txt" ""
+            createDirectory "a-dir"
+            writeFile ("a-dir" </> "another-file.txt") ""
+#ifndef WINDOWS
+            createFileLink "a-file.txt" "a-link.txt"
+            createDirectoryLink "a-dir" "a-dir-link"
+#endif
+    it "sourceDirectory" $
+        testSourceDir sourceDirectory
+          [ "a-file.txt"
+          , "a-dir"
+#ifndef WINDOWS
+          , "a-link.txt"
+          , "a-dir-link"
+#endif
           ]
-    it "sourceDirectoryDeep" $ do
-        res1 <- runConduitRes
-              $ sourceDirectoryDeep False "test" .| filterC (not . hasExtension' ".swp") .| sinkList
-        res2 <- runConduitRes
-              $ sourceDirectoryDeep True "test" .| filterC (not . hasExtension' ".swp") .| sinkList
-        sort res1 `shouldBe`
-          [ "test" </> "Data" </> "Conduit" </> "Extra" </> "ZipConduitSpec.hs"
-          , "test" </> "Data" </> "Conduit" </> "StreamSpec.hs"
-          , "test" </> "Spec.hs"
-          , "test" </> "StreamSpec.hs"
-          , "test" </> "doctests.hs"
-          , "test" </> "main.hs"
-          , "test" </> "subdir" </> "dummyfile.txt"
+    it "sourceDirectoryDeep False" $
+        testSourceDir (sourceDirectoryDeep False)
+          [ "a-file.txt"
+          , "a-dir" </> "another-file.txt"
+#ifndef WINDOWS
+          , "a-link.txt"
+#endif
           ]
-        sort res1 `shouldBe` sort res2
+    it "sourceDirectoryDeep True" $
+        testSourceDir (sourceDirectoryDeep True)
+          [ "a-file.txt"
+          , "a-dir" </> "another-file.txt"
+#ifndef WINDOWS
+          , "a-link.txt"
+          , "a-dir-link" </> "another-file.txt"
+#endif
+          ]
     prop "drop" $ \(T.pack -> input) count ->
         runConduitPure (yieldMany input .| (dropC count >>= \() -> sinkList))
         `shouldBe` T.unpack (T.drop count input)
